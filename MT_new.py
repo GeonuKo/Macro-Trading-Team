@@ -1,6 +1,10 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+import plotly.graph_objects as go
+import plotly.express as px
+import sqlite3
+import os
 
 # 0. 페이지 설정
 st.set_page_config(
@@ -14,21 +18,79 @@ with st.sidebar:
     st.title("목록")
     menu = st.radio(
         "이동할 페이지를 클릭하세요",
-        ["메인 대시보드", "FOMC", "ECB", "BOK", "경제지표 캘린더"], # "경제지표 캘린더" 추가
+        ["메인 대시보드", "FOMC", "ECB", "BOK", "경제지표 캘린더"], 
         index=0
     )
 
-# --- 페이지 함수 정의 ---
+# 1. 데이터 가져오기 함수 (진단 모드 포함)
+current_dir = os.path.dirname(os.path.abspath(__file__))
+db_path = 'market.db'  # 위와 동일하게 파일명만 입력
+st.write("현재 연결된 DB 경로:", os.path.abspath(db_path))
 
-def main_dashboard():
-    st.title("하나증권 외화운용실")
-    st.subheader("외화운용실 공유 플랫폼")
-    st.write("실시간 시장 지표 및 내부 리서치 공유를 위한 대시보드입니다.")
+def get_data():
+    import os
+    # 파일이 실제로 존재하는지 먼저 확인
+    if not os.path.exists(db_path):
+        return pd.DataFrame() 
     
-    # 메인 요약 샘플 (추후 확장 가능)
-    col1, col2 = st.columns(2)
-    with col1:
-        st.info("💡 **최신 업데이트**\n\n- 4월 FOMC: 매파적 동결 및 파월 이사 잔류 선언\n- 4월 ECB: 에너지 쇼크에 따른 금리 인상 가능성 부각")
+    try:
+        with sqlite3.connect(db_path) as conn:
+            # feeder가 만든 'rates' 테이블을 읽어옴
+            df = pd.read_sql("SELECT * FROM rates", conn)
+            return df
+    except Exception as e:
+        # 에러가 나면 화면에 표시해서 원인을 알 수 있게 함
+        st.error(f"데이터 로딩 에러: {e}")
+        return pd.DataFrame()
+
+# --- 페이지 함수 정의 ---
+def main_dashboard():
+    st.set_page_config(page_title="하나증권 외화운용실", layout="wide")
+    st.title("하나증권 외화운용실 공유 플랫폼")
+    st.write(f"최종 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    # --- [1단계: 실시간 금리 요약 (DB 연동)] ---
+    st.subheader("📊 Global Benchmark Yields (Real-time)")
+    
+    df = get_data()
+
+    if df.empty:
+        st.error("데이터 보관함에서 자료를 찾을 수 없습니다.")
+        st.info(f"현재 프로그램이 찾고 있는 경로: {os.path.abspath(db_path)}")
+    else:
+        # 데이터가 있다면 화면에 출력 (이 코드가 있는지 확인!)
+        st.dataframe(df)
+
+    st.divider()
+
+    # --- [2단계: 경제지표 캘린더 (수정사항 반영)] ---
+    st.subheader("🗓️ Today's Economic Calendar")
+    
+    # 요청하신 7가지 항목을 포함한 샘플 데이터
+    calendar_data = {
+        "발표시간": ["16:00", "21:30", "21:30", "23:00", "23:00"],
+        "국가": ["DE", "US", "US", "US", "US"],
+        "지표명": [
+            "독일 소비자물가지수(CPI) (전월비)", 
+            "미국 비농업 고용지수", 
+            "미국 실업률", 
+            "ISM 비제조업 PMI",
+            "미국 공장수주"
+        ],
+        "중요도": ["⭐⭐", "⭐⭐⭐", "⭐⭐⭐", "⭐⭐⭐", "⚠️"],
+        "실제치": ["0.3%", "-", "-", "-", "-"], # 발표 전은 "-"
+        "예측치": ["0.2%", "185K", "3.9%", "51.4", "0.5%"],
+        "이전치": ["0.1%", "203K", "3.8%", "52.6", "-0.8%"]
+    }
+
+    df_calendar = pd.DataFrame(calendar_data)
+
+    # 표 형태로 출력 (지표명, 발표시간, 국가, 중요도, 실제치, 예측치, 이전치 순서)
+    st.table(df_calendar[["지표명", "발표시간", "국가", "중요도", "실제치", "예측치", "이전치"]])
+
+    st.info("💡 실시간 금리는 1분마다 자동으로 업데이트됩니다.")
+
+
 
 def fomc_page():
     # 헤더 섹션
@@ -109,6 +171,7 @@ def fomc_page():
             - **리스크 시나리오:** 올해 중반까지 코어 인플레 수치에 진전이 없다면, FOMC 내부 논의는 **'인상(Hike) 가능성'**을 공식적으로 검토하기 시작할 것. 
             - **관전 포인트:** 현재 완화 편향을 제거하려는 위원들의 수가 상당하다는 점에 주목해야 함.
             """)
+        
 def ecb_page():
     # 헤더 섹션
     st.title("🇪🇺 ECB Preview")
@@ -239,127 +302,133 @@ def bok_page():
         st.table(pd.DataFrame(path_data))
         st.caption("*유가 충격이 '물가 상승'을 먼저 일으키고, '성장 둔화'를 나중에 일으키는 시차(Lag)에 주목")
 
-# --- 데이터 준비 (제공해주신 텍스트 기반 데이터셋) ---
 def get_calendar_data():
     data = [
         # --- 2026년 4월 ---
-        {"date": "2026-04-01", "time": "21:15", "country": "🇺🇸", "event": "ADP 비농업 부문 고용 변화 (3월)", "imp": "★★★", "actual": "62K", "forecast": "41K", "previous": "66K"},
-        {"date": "2026-04-01", "time": "21:30", "country": "🇺🇸", "event": "소매판매 (MoM) (2월)", "imp": "★★★", "actual": "0.6%", "forecast": "0.5%", "previous": "-0.1%"},
-        {"date": "2026-04-01", "time": "21:30", "country": "🇺🇸", "event": "근원 소매판매 (MoM) (2월)", "imp": "★★★", "actual": "0.5%", "forecast": "0.3%", "previous": "0.0%"},
-        {"date": "2026-04-01", "time": "22:45", "country": "🇺🇸", "event": "S&P 글로벌 제조업 PMI (3월)", "imp": "★★☆", "actual": "52.3", "forecast": "52.4", "previous": "51.6"},
-        {"date": "2026-04-01", "time": "23:00", "country": "🇺🇸", "event": "ISM 제조업 PMI (3월)", "imp": "★★★", "actual": "52.7", "forecast": "52.3", "previous": "52.4"},
-        {"date": "2026-04-01", "time": "23:00", "country": "🇺🇸", "event": "ISM 제조업 지불가격 (3월)", "imp": "★★☆", "actual": "78.3", "forecast": "74.0", "previous": "70.5"},
-        {"date": "2026-04-01", "time": "23:30", "country": "🇺🇸", "event": "원유 재고", "imp": "★★☆", "actual": "5.451M", "forecast": "1.800M", "previous": "6.926M"},
+        {"date": "2026-04-01", "time": "21:15", "country": "🇺🇸", "event": "ADP 비농업부문 고용 변화 (3월)", "imp": "★★★", "actual": "62K", "forecast": "41K", "previous": "66K"},
+        {"date": "2026-04-01", "time": "21:30", "country": "🇺🇸", "event": "소매판매 (MoM) (2월)", "imp": "★★★", "actual": "0.60%", "forecast": "0.50%", "previous": "-0.10%"},
+        {"date": "2026-04-01", "time": "21:30", "country": "🇺🇸", "event": "근원 소매판매 (MoM) (2월)", "imp": "★★★", "actual": "0.50%", "forecast": "0.30%", "previous": "0.00%"},
+        {"date": "2026-04-01", "time": "22:45", "country": "🇺🇸", "event": "제조업 구매관리자지수 (3월)", "imp": "★★☆", "actual": "52.3", "forecast": "52.4", "previous": "51.6"},
+        {"date": "2026-04-01", "time": "23:00", "country": "🇺🇸", "event": "ISM 제조업구매자지수 (3월)", "imp": "★★★", "actual": "52.7", "forecast": "52.3", "previous": "52.4"},
+        {"date": "2026-04-01", "time": "23:30", "country": "🇺🇸", "event": "원유재고", "imp": "★★☆", "actual": "5.451M", "forecast": "1.800M", "previous": "6.926M"},
+
+        {"date": "2026-04-02", "time": "08:00", "country": "🇰🇷", "event": "한국 소비자물가지수 (MoM) (3월)", "imp": "★★★", "actual": "0.30%", "forecast": "0.60%", "previous": "0.30%"},
+        {"date": "2026-04-02", "time": "08:00", "country": "🇰🇷", "event": "한국 소비자물가지수 (YoY) (3월)", "imp": "★★★", "actual": "2.20%", "forecast": "2.40%", "previous": "2.00%"},
+        {"date": "2026-04-02", "time": "10:00", "country": "🇺🇸", "event": "미국 대통령 트럼프 연설", "imp": "★★☆", "actual": "-", "forecast": "-", "previous": "-"},
+        {"date": "2026-04-02", "time": "21:30", "country": "🇺🇸", "event": "신규 실업수당청구건수", "imp": "★★★", "actual": "202K", "forecast": "212K", "previous": "211K"},
+
+        {"date": "2026-04-03", "time": "00:00", "country": "🇺🇸", "event": "미국 - 부활절 (휴일)", "imp": "★☆☆", "actual": "휴일", "forecast": "-", "previous": "-"},
+        {"date": "2026-04-03", "time": "21:30", "country": "🇺🇸", "event": "미국 평균 시간당 임금 (MoM) (3월)", "imp": "★★★", "actual": "0.20%", "forecast": "0.30%", "previous": "0.40%"},
+        {"date": "2026-04-03", "time": "21:30", "country": "🇺🇸", "event": "비농업고용지수 (3월)", "imp": "★★★", "actual": "178K", "forecast": "65K", "previous": "-133K"},
+        {"date": "2026-04-03", "time": "21:30", "country": "🇺🇸", "event": "실업률 (3월)", "imp": "★★★", "actual": "4.30%", "forecast": "4.40%", "previous": "4.40%"},
+        {"date": "2026-04-03", "time": "22:45", "country": "🇺🇸", "event": "서비스 구매관리자지수 (3월)", "imp": "★★☆", "actual": "49.8", "forecast": "51.1", "previous": "51.7"},
+
+        {"date": "2026-04-06", "time": "23:00", "country": "🇺🇸", "event": "ISM 비제조업구매자지수 (3월)", "imp": "★★★", "actual": "54", "forecast": "54.8", "previous": "56.1"},
+        {"date": "2026-04-07", "time": "02:00", "country": "🇺🇸", "event": "미국 대통령 트럼프 연설", "imp": "★★☆", "actual": "-", "forecast": "-", "previous": "-"},
+        {"date": "2026-04-08", "time": "23:30", "country": "🇺🇸", "event": "원유재고", "imp": "★★☆", "actual": "3.081M", "forecast": "-1.000M", "previous": "5.451M"},
+
+        {"date": "2026-04-09", "time": "03:00", "country": "🇺🇸", "event": "연방공개시장위원회(FOMC) 회의록", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "-"},
+        {"date": "2026-04-09", "time": "21:30", "country": "🇺🇸", "event": "근원 소비지출물가지수 (MoM) (2월)", "imp": "★★★", "actual": "0.40%", "forecast": "0.40%", "previous": "0.40%"},
+        {"date": "2026-04-09", "time": "21:30", "country": "🇺🇸", "event": "근원 개인소비지출 물가지수 (YoY) (2월)", "imp": "★★★", "actual": "3.00%", "forecast": "3.00%", "previous": "3.10%"},
+        {"date": "2026-04-09", "time": "21:30", "country": "🇺🇸", "event": "GDP (QoQ) (4분기)", "imp": "★★★", "actual": "0.50%", "forecast": "0.70%", "previous": "4.40%"},
+        {"date": "2026-04-09", "time": "21:30", "country": "🇺🇸", "event": "신규 실업수당청구건수", "imp": "★★★", "actual": "219K", "forecast": "210K", "previous": "203K"},
+
+        {"date": "2026-04-10", "time": "10:00", "country": "🇰🇷", "event": "한국 금리 결정 (4월)", "imp": "★★★", "actual": "2.50%", "forecast": "2.50%", "previous": "2.50%"},
+        {"date": "2026-04-10", "time": "21:30", "country": "🇺🇸", "event": "소비자물가지수 (MoM) (3월)", "imp": "★★★", "actual": "0.90%", "forecast": "1.00%", "previous": "0.30%"},
+        {"date": "2026-04-10", "time": "21:30", "country": "🇺🇸", "event": "근원 소비자물가지수 (MoM) (3월)", "imp": "★★★", "actual": "0.20%", "forecast": "0.30%", "previous": "0.20%"},
+        {"date": "2026-04-10", "time": "21:30", "country": "🇺🇸", "event": "소비자물가지수 (YoY) (3월)", "imp": "★★★", "actual": "3.30%", "forecast": "3.40%", "previous": "2.40%"},
+
+        {"date": "2026-04-13", "time": "23:00", "country": "🇺🇸", "event": "기존주택판매 (3월)", "imp": "★★☆", "actual": "3.98M", "forecast": "4.07M", "previous": "4.13M"},
+        {"date": "2026-04-14", "time": "21:30", "country": "🇺🇸", "event": "생산자물가지수 (MoM) (3월)", "imp": "★★★", "actual": "0.50%", "forecast": "1.10%", "previous": "0.50%"},
         
-        {"date": "2026-04-02", "time": "10:00", "country": "🇺🇸", "event": "트럼프 대통령 연설", "imp": "★★★", "actual": "", "forecast": "", "previous": ""},
-        {"date": "2026-04-02", "time": "21:30", "country": "🇺🇸", "event": "신규 실업수당 청구건수", "imp": "★★☆", "actual": "202K", "forecast": "212K", "previous": "211K"},
-        
-        {"date": "2026-04-03", "time": "All Day", "country": "🇺🇸", "event": "성금요일 (Good Friday) 휴장", "imp": "휴장", "actual": "", "forecast": "", "previous": ""},
-        {"date": "2026-04-03", "time": "21:30", "country": "🇺🇸", "event": "평균 시간당 임금 (MoM) (3월)", "imp": "★★☆", "actual": "0.2%", "forecast": "0.3%", "previous": "0.4%"},
-        {"date": "2026-04-03", "time": "21:30", "country": "🇺🇸", "event": "비농업 고용지수 (3월)", "imp": "★★★", "actual": "178K", "forecast": "65K", "previous": "-133K"},
-        {"date": "2026-04-03", "time": "21:30", "country": "🇺🇸", "event": "실업률 (3월)", "imp": "★★★", "actual": "4.3%", "forecast": "4.4%", "previous": "4.4%"},
-        {"date": "2026-04-03", "time": "22:45", "country": "🇺🇸", "event": "S&P 글로벌 서비스업 PMI (3월)", "imp": "★★☆", "actual": "49.8", "forecast": "51.1", "previous": "51.7"},
-        
-        {"date": "2026-04-06", "time": "23:00", "country": "🇺🇸", "event": "ISM 비제조업 지불가격 (3월)", "imp": "★★☆", "actual": "70.7", "forecast": "67.0", "previous": "63.0"},
-        {"date": "2026-04-06", "time": "23:00", "country": "🇺🇸", "event": "ISM 비제조업 PMI (3월)", "imp": "★★★", "actual": "54.0", "forecast": "54.8", "previous": "56.1"},
-        
-        {"date": "2026-04-07", "time": "02:00", "country": "🇺🇸", "event": "트럼프 대통령 연설", "imp": "★★★", "actual": "", "forecast": "", "previous": ""},
-        {"date": "2026-04-07", "time": "21:30", "country": "🇺🇸", "event": "내구재 수주 (MoM) (2월)", "imp": "★★☆", "actual": "-1.4%", "forecast": "-1.1%", "previous": "-0.5%"},
-        
-        {"date": "2026-04-08", "time": "23:30", "country": "🇺🇸", "event": "원유 재고", "imp": "★★☆", "actual": "3.081M", "forecast": "-1.000M", "previous": "5.451M"},
-        
-        {"date": "2026-04-09", "time": "02:00", "country": "🇺🇸", "event": "10년물 국채 입찰", "imp": "★★☆", "actual": "4.282%", "forecast": "", "previous": "4.217%"},
-        {"date": "2026-04-09", "time": "03:00", "country": "🇺🇸", "event": "FOMC 의사록 공개", "imp": "★★★", "actual": "", "forecast": "", "previous": ""},
-        {"date": "2026-04-09", "time": "21:30", "country": "🇺🇸", "event": "근원 PCE 가격지수 (MoM) (2월)", "imp": "★★★", "actual": "0.4%", "forecast": "0.4%", "previous": "0.4%"},
-        {"date": "2026-04-09", "time": "21:30", "country": "🇺🇸", "event": "근원 PCE 가격지수 (YoY) (2월)", "imp": "★★★", "actual": "3.0%", "forecast": "3.0%", "previous": "3.1%"},
-        {"date": "2026-04-09", "time": "21:30", "country": "🇺🇸", "event": "GDP (QoQ) (4분기 확정치)", "imp": "★★★", "actual": "0.5%", "forecast": "0.7%", "previous": "4.4%"},
-        {"date": "2026-04-09", "time": "21:30", "country": "🇺🇸", "event": "신규 실업수당 청구건수", "imp": "★★☆", "actual": "219K", "forecast": "210K", "previous": "203K"},
-        
-        {"date": "2026-04-10", "time": "02:00", "country": "🇺🇸", "event": "30년물 국채 입찰", "imp": "★★☆", "actual": "4.876%", "forecast": "", "previous": "4.871%"},
-        {"date": "2026-04-10", "time": "21:30", "country": "🇺🇸", "event": "소비자물가지수 (CPI) (MoM) (3월)", "imp": "★★★", "actual": "0.9%", "forecast": "1.0%", "previous": "0.3%"},
-        {"date": "2026-04-10", "time": "21:30", "country": "🇺🇸", "event": "근원 CPI (MoM) (3월)", "imp": "★★★", "actual": "0.2%", "forecast": "0.3%", "previous": "0.2%"},
-        {"date": "2026-04-10", "time": "21:30", "country": "🇺🇸", "event": "소비자물가지수 (CPI) (YoY) (3월)", "imp": "★★★", "actual": "3.3%", "forecast": "3.4%", "previous": "2.4%"},
-        
-        {"date": "2026-04-13", "time": "23:00", "country": "🇺🇸", "event": "기존주택매매 (3월)", "imp": "★★☆", "actual": "3.98M", "forecast": "4.07M", "previous": "4.13M"},
-        {"date": "2026-04-14", "time": "21:30", "country": "🇺🇸", "event": "생산자물가지수 (PPI) (MoM) (3월)", "imp": "★★☆", "actual": "0.5%", "forecast": "1.1%", "previous": "0.5%"},
-        {"date": "2026-04-15", "time": "19:00", "country": "🇺🇸", "event": "트럼프 대통령 연설", "imp": "★★★", "actual": "", "forecast": "", "previous": ""},
-        {"date": "2026-04-15", "time": "23:30", "country": "🇺🇸", "event": "원유 재고", "imp": "★★☆", "actual": "-0.913M", "forecast": "2.100M", "previous": "3.081M"},
-        
-        {"date": "2026-04-16", "time": "21:30", "country": "🇺🇸", "event": "필라델피아 연준 제조업지수 (4월)", "imp": "★★☆", "actual": "26.7", "forecast": "10.3", "previous": "18.1"},
-        {"date": "2026-04-16", "time": "21:30", "country": "🇺🇸", "event": "신규 실업수당 청구건수", "imp": "★★☆", "actual": "207K", "forecast": "213K", "previous": "218K"},
-        
-        {"date": "2026-04-17", "time": "08:00", "country": "🇺🇸", "event": "트럼프 대통령 연설", "imp": "★★★", "actual": "", "forecast": "", "previous": ""},
-        {"date": "2026-04-18", "time": "03:00", "country": "🇺🇸", "event": "트럼프 대통령 연설", "imp": "★★★", "actual": "", "forecast": "", "previous": ""},
-        
-        {"date": "2026-04-21", "time": "21:30", "country": "🇺🇸", "event": "소매판매 (MoM) (3월)", "imp": "★★★", "actual": "1.7%", "forecast": "1.4%", "previous": "0.7%"},
-        {"date": "2026-04-21", "time": "21:30", "country": "🇺🇸", "event": "근원 소매판매 (MoM) (3월)", "imp": "★★★", "actual": "1.9%", "forecast": "1.4%", "previous": "0.7%"},
-        {"date": "2026-04-21", "time": "21:30", "country": "🇺🇸", "event": "트럼프 대통령 연설", "imp": "★★★", "actual": "", "forecast": "", "previous": ""},
-        
-        {"date": "2026-04-22", "time": "23:30", "country": "🇺🇸", "event": "원유 재고", "imp": "★★☆", "actual": "1.925M", "forecast": "-1.900M", "previous": "-0.913M"},
-        
-        {"date": "2026-04-23", "time": "21:30", "country": "🇺🇸", "event": "신규 실업수당 청구건수", "imp": "★★☆", "actual": "214K", "forecast": "211K", "previous": "208K"},
-        {"date": "2026-04-23", "time": "22:45", "country": "🇺🇸", "event": "S&P 글로벌 서비스업 PMI (4월)", "imp": "★★☆", "actual": "", "forecast": "51.3", "previous": "50.5"},
-        {"date": "2026-04-23", "time": "22:45", "country": "🇺🇸", "event": "S&P 글로벌 제조업 PMI (4월)", "imp": "★★☆", "actual": "", "forecast": "54.0", "previous": "52.5"},
-        
-        {"date": "2026-04-26", "time": "01:00", "country": "🇺🇸", "event": "트럼프 대통령 연설", "imp": "★★★", "actual": "", "forecast": "", "previous": ""},
-        {"date": "2026-04-26", "time": "11:45", "country": "🇺🇸", "event": "트럼프 대통령 연설", "imp": "★★★", "actual": "", "forecast": "", "previous": ""},
-        {"date": "2026-04-27", "time": "08:00", "country": "🇺🇸", "event": "트럼프 대통령 연설", "imp": "★★★", "actual": "", "forecast": "", "previous": ""},
-        
-        {"date": "2026-04-28", "time": "23:00", "country": "🇺🇸", "event": "CB 소비자신뢰지수 (4월)", "imp": "★★★", "actual": "92.8", "forecast": "89.0", "previous": "92.2"},
-        
-        {"date": "2026-04-29", "time": "21:30", "country": "🇺🇸", "event": "내구재 수주 (MoM) (3월)", "imp": "★★☆", "actual": "", "forecast": "0.8%", "previous": "0.4%"},
-        {"date": "2026-04-29", "time": "23:30", "country": "🇺🇸", "event": "원유 재고", "imp": "★★☆", "actual": "-6.234M", "forecast": "0.300M", "previous": "1.925M"},
-        
-        {"date": "2026-04-30", "time": "03:00", "country": "🇺🇸", "event": "금리 결정 (Fed Interest Rate Decision)", "imp": "★★★", "actual": "3.75%", "forecast": "3.75%", "previous": "3.75%"},
-        {"date": "2026-04-30", "time": "03:00", "country": "🇺🇸", "event": "FOMC 성명서", "imp": "★★★", "actual": "", "forecast": "", "previous": ""},
-        {"date": "2026-04-30", "time": "03:30", "country": "🇺🇸", "event": "FOMC 기자회견", "imp": "★★★", "actual": "", "forecast": "", "previous": ""},
-        {"date": "2026-04-30", "time": "21:30", "country": "🇺🇸", "event": "GDP (QoQ) (1분기 속보치)", "imp": "★★★", "actual": "", "forecast": "2.2%", "previous": "0.5%"},
-        {"date": "2026-04-30", "time": "21:30", "country": "🇺🇸", "event": "근원 PCE 가격지수 (YoY) (3월)", "imp": "★★★", "actual": "3.2%", "forecast": "3.0%", "previous": ""},
-        {"date": "2026-04-30", "time": "21:30", "country": "🇺🇸", "event": "근원 PCE 가격지수 (MoM) (3월)", "imp": "★★★", "actual": "0.3%", "forecast": "0.4%", "previous": ""},
-        {"date": "2026-04-30", "time": "21:30", "country": "🇺🇸", "event": "신규 실업수당 청구건수", "imp": "★★☆", "actual": "213K", "forecast": "214K", "previous": ""},
-        {"date": "2026-04-30", "time": "22:45", "country": "🇺🇸", "event": "시카고 PMI (4월)", "imp": "★★☆", "actual": "54.8", "forecast": "52.8", "previous": ""},
+        {"date": "2026-04-15", "time": "08:00", "country": "🇰🇷", "event": "한국 실업률 (3월)", "imp": "★★☆", "actual": "2.70%", "forecast": "-", "previous": "2.90%"},
+        {"date": "2026-04-15", "time": "19:00", "country": "🇺🇸", "event": "미국 대통령 트럼프 연설 (1)", "imp": "★★☆", "actual": "-", "forecast": "-", "previous": "-"},
+        {"date": "2026-04-15", "time": "19:00", "country": "🇺🇸", "event": "미국 대통령 트럼프 연설 (2)", "imp": "★★☆", "actual": "-", "forecast": "-", "previous": "-"},
+        {"date": "2026-04-15", "time": "23:30", "country": "🇺🇸", "event": "원유재고", "imp": "★★☆", "actual": "-0.913M", "forecast": "2.100M", "previous": "3.081M"},
+
+        {"date": "2026-04-16", "time": "21:30", "country": "🇺🇸", "event": "필라델피아 연은 제조업활동지수 (4월)", "imp": "★★☆", "actual": "26.7", "forecast": "10.3", "previous": "18.1"},
+        {"date": "2026-04-16", "time": "21:30", "country": "🇺🇸", "event": "신규 실업수당청구건수", "imp": "★★★", "actual": "207K", "forecast": "213K", "previous": "218K"},
+
+        {"date": "2026-04-17", "time": "08:00", "country": "🇺🇸", "event": "미국 대통령 트럼프 연설", "imp": "★★☆", "actual": "-", "forecast": "-", "previous": "-"},
+        {"date": "2026-04-18", "time": "03:00", "country": "🇺🇸", "event": "미국 대통령 트럼프 연설", "imp": "★★☆", "actual": "-", "forecast": "-", "previous": "-"},
+
+        {"date": "2026-04-21", "time": "21:30", "country": "🇺🇸", "event": "소매판매 (MoM) (3월)", "imp": "★★★", "actual": "1.70%", "forecast": "1.40%", "previous": "0.70%"},
+        {"date": "2026-04-21", "time": "21:30", "country": "🇺🇸", "event": "근원 소매판매 (MoM) (3월)", "imp": "★★★", "actual": "1.90%", "forecast": "1.40%", "previous": "0.70%"},
+        {"date": "2026-04-21", "time": "21:30", "country": "🇺🇸", "event": "미국 대통령 트럼프 연설", "imp": "★★☆", "actual": "-", "forecast": "-", "previous": "-"},
+
+        {"date": "2026-04-22", "time": "23:30", "country": "🇺🇸", "event": "원유재고", "imp": "★★☆", "actual": "1.925M", "forecast": "-1.900M", "previous": "-0.913M"},
+
+        {"date": "2026-04-23", "time": "08:00", "country": "🇰🇷", "event": "한국 GDP (YoY) (1분기)", "imp": "★★★", "actual": "3.60%", "forecast": "2.70%", "previous": "1.60%"},
+        {"date": "2026-04-23", "time": "08:00", "country": "🇰🇷", "event": "한국 GDP (QoQ) (1분기)", "imp": "★★★", "actual": "1.70%", "forecast": "1.00%", "previous": "-0.20%"},
+        {"date": "2026-04-23", "time": "21:30", "country": "🇺🇸", "event": "신규 실업수당청구건수", "imp": "★★★", "actual": "214K", "forecast": "211K", "previous": "208K"},
+        {"date": "2026-04-23", "time": "22:45", "country": "🇺🇸", "event": "서비스 구매관리자지수 (4월)", "imp": "★★☆", "actual": "51.3", "forecast": "50.5", "previous": "49.8"},
+        {"date": "2026-04-23", "time": "22:45", "country": "🇺🇸", "event": "제조업 구매관리자지수 (4월)", "imp": "★★☆", "actual": "54", "forecast": "52.5", "previous": "52.3"},
+
+        {"date": "2026-04-26", "time": "01:00", "country": "🇺🇸", "event": "미국 대통령 트럼프 연설", "imp": "★★☆", "actual": "-", "forecast": "-", "previous": "-"},
+        {"date": "2026-04-26", "time": "11:45", "country": "🇺🇸", "event": "미국 대통령 트럼프 연설", "imp": "★★☆", "actual": "-", "forecast": "-", "previous": "-"},
+        {"date": "2026-04-27", "time": "08:00", "country": "🇺🇸", "event": "미국 대통령 트럼프 연설", "imp": "★★☆", "actual": "-", "forecast": "-", "previous": "-"},
+
+        {"date": "2026-04-28", "time": "23:00", "country": "🇺🇸", "event": "CB 소비자신뢰지수 (4월)", "imp": "★★★", "actual": "92.8", "forecast": "89", "previous": "92.2"},
+        {"date": "2026-04-29", "time": "23:30", "country": "🇺🇸", "event": "원유재고", "imp": "★★☆", "actual": "-6.234M", "forecast": "0.300M", "previous": "1.925M"},
+
+        {"date": "2026-04-30", "time": "03:00", "country": "🇺🇸", "event": "금리결정 (Interest Rate)", "imp": "★★★", "actual": "3.75%", "forecast": "3.75%", "previous": "3.75%"},
+        {"date": "2026-04-30", "time": "03:00", "country": "🇺🇸", "event": "연방공개시장위원회 성명서", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "-"},
+        {"date": "2026-04-30", "time": "03:30", "country": "🇺🇸", "event": "FOMC 기자 회견", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "-"},
+        {"date": "2026-04-30", "time": "08:00", "country": "🇰🇷", "event": "한국 소매판매 (MoM) (3월)", "imp": "★★☆", "actual": "1.80%", "forecast": "-", "previous": "-0.30%"},
+        {"date": "2026-04-30", "time": "21:30", "country": "🇺🇸", "event": "GDP (QoQ) (1분기)", "imp": "★★★", "actual": "-", "forecast": "2.20%", "previous": "0.50%"},
+        {"date": "2026-04-30", "time": "21:30", "country": "🇺🇸", "event": "근원 개인소비지출 물가지수 (YoY) (3월)", "imp": "★★★", "actual": "-", "forecast": "3.20%", "previous": "3.00%"},
+        {"date": "2026-04-30", "time": "21:30", "country": "🇺🇸", "event": "근원 소비지출물가지수 (MoM) (3월)", "imp": "★★★", "actual": "-", "forecast": "0.30%", "previous": "0.40%"},
+        {"date": "2026-04-30", "time": "21:30", "country": "🇺🇸", "event": "신규 실업수당청구건수", "imp": "★★★", "actual": "-", "forecast": "213K", "previous": "214K"},
 
         # --- 2026년 5월 ---
-        {"date": "2026-05-01", "time": "22:45", "country": "🇺🇸", "event": "S&P 글로벌 제조업 PMI (4월)", "imp": "★★☆", "actual": "54.0", "forecast": "54.0", "previous": ""},
-        {"date": "2026-05-01", "time": "23:00", "country": "🇺🇸", "event": "ISM 제조업 PMI (4월)", "imp": "★★★", "actual": "53.2", "forecast": "52.7", "previous": ""},
-        {"date": "2026-05-01", "time": "23:00", "country": "🇺🇸", "event": "ISM 제조업 지불가격 (4월)", "imp": "★★☆", "actual": "80.0", "forecast": "78.3", "previous": ""},
-        
-        {"date": "2026-05-05", "time": "All Day", "country": "🇰🇷", "event": "어린이날 휴장", "imp": "휴장", "actual": "", "forecast": "", "previous": ""},
-        {"date": "2026-05-05", "time": "22:45", "country": "🇺🇸", "event": "S&P 글로벌 서비스업 PMI (4월)", "imp": "★★☆", "actual": "51.3", "forecast": "49.8", "previous": ""},
-        {"date": "2026-05-05", "time": "23:00", "country": "🇺🇸", "event": "신규 주택 매매 (3월)", "imp": "★★☆", "actual": "587K", "forecast": "", "previous": ""},
-        {"date": "2026-05-05", "time": "23:00", "country": "🇺🇸", "event": "구인·이직 보고서 (JOLTs) (3월)", "imp": "★★☆", "actual": "6.882M", "forecast": "", "previous": ""},
-        {"date": "2026-05-05", "time": "23:00", "country": "🇺🇸", "event": "ISM 비제조업 지불가격 (4월)", "imp": "★★☆", "actual": "70.7", "forecast": "", "previous": ""},
-        {"date": "2026-05-05", "time": "23:00", "country": "🇺🇸", "event": "ISM 비제조업 PMI (4월)", "imp": "★★★", "actual": "54.0", "forecast": "", "previous": ""},
-        
-        {"date": "2026-05-06", "time": "21:15", "country": "🇺🇸", "event": "ADP 비농업 부문 고용 변화 (4월)", "imp": "★★★", "actual": "62K", "forecast": "", "previous": ""},
-        {"date": "2026-05-07", "time": "21:30", "country": "🇺🇸", "event": "신규 실업수당 청구건수", "imp": "★★☆", "actual": "", "forecast": "", "previous": ""},
-        
-        {"date": "2026-05-08", "time": "21:30", "country": "🇺🇸", "event": "평균 시간당 임금 (MoM) (4월)", "imp": "★★☆", "actual": "0.2%", "forecast": "", "previous": ""},
-        {"date": "2026-05-08", "time": "21:30", "country": "🇺🇸", "event": "비농업 고용지수 (4월)", "imp": "★★★", "actual": "178K", "forecast": "", "previous": ""},
-        {"date": "2026-05-08", "time": "21:30", "country": "🇺🇸", "event": "실업률 (4월)", "imp": "★★★", "actual": "4.3%", "forecast": "", "previous": ""},
-        
-        {"date": "2026-05-11", "time": "23:00", "country": "🇺🇸", "event": "기존주택매매 (4월)", "imp": "★★☆", "actual": "3.98M", "forecast": "", "previous": ""},
-        
-        {"date": "2026-05-12", "time": "21:30", "country": "🇺🇸", "event": "소비자물가지수 (CPI) (MoM) (4월)", "imp": "★★★", "actual": "0.9%", "forecast": "", "previous": ""},
-        {"date": "2026-05-12", "time": "21:30", "country": "🇺🇸", "event": "소비자물가지수 (CPI) (YoY) (4월)", "imp": "★★★", "actual": "3.3%", "forecast": "", "previous": ""},
-        {"date": "2026-05-12", "time": "21:30", "country": "🇺🇸", "event": "근원 CPI (MoM) (4월)", "imp": "★★★", "actual": "0.2%", "forecast": "", "previous": ""},
-        
-        {"date": "2026-05-13", "time": "21:30", "country": "🇺🇸", "event": "생산자물가지수 (PPI) (MoM) (4월)", "imp": "★★☆", "actual": "0.5%", "forecast": "", "previous": ""},
-        
-        {"date": "2026-05-14", "time": "21:30", "country": "🇺🇸", "event": "소매판매 (MoM) (4월)", "imp": "★★★", "actual": "1.7%", "forecast": "", "previous": ""},
-        {"date": "2026-05-14", "time": "21:30", "country": "🇺🇸", "event": "근원 소매판매 (MoM) (4월)", "imp": "★★★", "actual": "1.9%", "forecast": "", "previous": ""},
-        
-        {"date": "2026-05-25", "time": "All Day", "country": "🇰🇷", "event": "부처님 오신 날 휴장", "imp": "휴장", "actual": "", "forecast": "", "previous": ""},
-        {"date": "2026-05-25", "time": "All Day", "country": "🇺🇸", "event": "메모리얼 데이 휴장", "imp": "휴장", "actual": "", "forecast": "", "previous": ""},
+        {"date": "2026-05-01", "time": "22:45", "country": "🇺🇸", "event": "제조업 구매관리자지수 (4월)", "imp": "★★☆", "actual": "-", "forecast": "54", "previous": "54"},
+        {"date": "2026-05-01", "time": "23:00", "country": "🇺🇸", "event": "ISM 제조업구매자지수 (4월)", "imp": "★★★", "actual": "-", "forecast": "53.2", "previous": "52.7"},
+
+        {"date": "2026-05-05", "time": "00:00", "country": "🇰🇷", "event": "한국 - 어린이 날 (휴일)", "imp": "★☆☆", "actual": "휴일", "forecast": "-", "previous": "-"},
+        {"date": "2026-05-05", "time": "22:45", "country": "🇺🇸", "event": "서비스 구매관리자지수 (4월)", "imp": "★★☆", "actual": "-", "forecast": "51.3", "previous": "49.8"},
+        {"date": "2026-05-05", "time": "23:00", "country": "🇺🇸", "event": "신규 주택판매 (3월)", "imp": "★★☆", "actual": "-", "forecast": "-", "previous": "587K"},
+        {"date": "2026-05-05", "time": "23:00", "country": "🇺🇸", "event": "미국 노동부 JOLTS (구인, 이직 보고서) (3월)", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "6.882M"},
+        {"date": "2026-05-05", "time": "23:00", "country": "🇺🇸", "event": "ISM 비제조업구매자지수 (4월)", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "54"},
+
+        {"date": "2026-05-06", "time": "08:00", "country": "🇰🇷", "event": "한국 소비자물가지수 (YoY) (4월)", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "2.20%"},
+        {"date": "2026-05-06", "time": "08:00", "country": "🇰🇷", "event": "한국 소비자물가지수 (MoM) (4월)", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "0.30%"},
+        {"date": "2026-05-06", "time": "21:15", "country": "🇺🇸", "event": "ADP 비농업부문 고용 변화 (4월)", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "62K"},
+
+        {"date": "2026-05-07", "time": "21:30", "country": "🇺🇸", "event": "신규 실업수당청구건수", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "-"},
+
+        {"date": "2026-05-08", "time": "21:30", "country": "🇺🇸", "event": "미국 평균 시간당 임금 (MoM) (4월)", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "0.20%"},
+        {"date": "2026-05-08", "time": "21:30", "country": "🇺🇸", "event": "비농업고용지수 (4월)", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "178K"},
+        {"date": "2026-05-08", "time": "21:30", "country": "🇺🇸", "event": "실업률 (4월)", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "4.30%"},
+
+        {"date": "2026-05-11", "time": "23:00", "country": "🇺🇸", "event": "기존주택판매 (4월)", "imp": "★★☆", "actual": "-", "forecast": "-", "previous": "3.98M"},
+
+        {"date": "2026-05-12", "time": "21:30", "country": "🇺🇸", "event": "소비자물가지수 (MoM) (4월)", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "0.90%"},
+        {"date": "2026-05-12", "time": "21:30", "country": "🇺🇸", "event": "소비자물가지수 (YoY) (4월)", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "3.30%"},
+        {"date": "2026-05-12", "time": "21:30", "country": "🇺🇸", "event": "근원 소비자물가지수 (MoM) (4월)", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "0.20%"},
+
+        {"date": "2026-05-13", "time": "08:00", "country": "🇰🇷", "event": "한국 실업률 (4월)", "imp": "★★☆", "actual": "-", "forecast": "-", "previous": "2.70%"},
+        {"date": "2026-05-13", "time": "21:30", "country": "🇺🇸", "event": "생산자물가지수 (MoM) (4월)", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "0.50%"},
+
+        {"date": "2026-05-14", "time": "21:30", "country": "🇺🇸", "event": "소매판매 (MoM) (4월)", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "1.70%"},
+        {"date": "2026-05-14", "time": "21:30", "country": "🇺🇸", "event": "근원 소매판매 (MoM) (4월)", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "1.90%"},
+
+        {"date": "2026-05-25", "time": "00:00", "country": "🇺🇸", "event": "미국 - 현충일 (휴일)", "imp": "★☆☆", "actual": "휴일", "forecast": "-", "previous": "-"},
+        {"date": "2026-05-25", "time": "00:00", "country": "🇰🇷", "event": "한국 - 석가탄신일 (휴일)", "imp": "★☆☆", "actual": "휴일", "forecast": "-", "previous": "-"},
+        {"date": "2026-05-28", "time": "10:00", "country": "🇰🇷", "event": "한국 금리 결정 (5월)", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "2.50%"},
 
         # --- 2026년 6월 ---
-        {"date": "2026-06-18", "time": "03:00", "country": "🇺🇸", "event": "금리 결정 (Fed Interest Rate Decision)", "imp": "★★★", "actual": "", "forecast": "", "previous": ""},
-        {"date": "2026-06-19", "time": "All Day", "country": "🇺🇸", "event": "준틴스(Juneteenth) 휴장", "imp": "휴장", "actual": "", "forecast": "", "previous": ""},
+        {"date": "2026-06-09", "time": "08:00", "country": "🇰🇷", "event": "한국 GDP (QoQ) (1분기 확정)", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "1.70%"},
+        {"date": "2026-06-09", "time": "08:00", "country": "🇰🇷", "event": "한국 GDP (YoY) (1분기 확정)", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "3.60%"},
+        {"date": "2026-06-18", "time": "03:00", "country": "🇺🇸", "event": "미국 금리결정", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "-"},
+        {"date": "2026-06-19", "time": "00:00", "country": "🇺🇸", "event": "미국 - Juneteenth (휴일)", "imp": "★☆☆", "actual": "휴일", "forecast": "-", "previous": "-"},
+
+        # --- 2026년 7월 ---
+        {"date": "2026-07-03", "time": "00:00", "country": "🇺🇸", "event": "미국 - 삼일절 (독립기념일 대체휴일)", "imp": "★☆☆", "actual": "휴일", "forecast": "-", "previous": "-"},
+        {"date": "2026-07-30", "time": "03:00", "country": "🇺🇸", "event": "미국 금리결정", "imp": "★★★", "actual": "-", "forecast": "-", "previous": "-"},
     ]
     # 제공된 텍스트 중 주요 지표들만 샘플링하여 구성했습니다.
     return pd.DataFrame(data)
 
-# --- 경제지표 캘린더 페이지 함수 ---
 def calendar_page():
     st.title("📅 경제지표 캘린더")
     st.write("한국(🇰🇷) 및 미국(🇺🇸)의 주요 경제지표 발표 일정입니다.")
@@ -370,7 +439,7 @@ def calendar_page():
     
     # 1. 월 선택 셀렉트박스
     years = [2026]
-    months = ["4월", "5월", "6월"]
+    months = ["4월", "5월", "6월", "7월"]
     
     col1, col2 = st.columns(2)
     with col1:
@@ -394,11 +463,16 @@ def calendar_page():
             # 요일 계산
             weekday = ["월", "화", "수", "목", "금", "토", "일"][date.weekday()]
             with st.expander(f"📅 {date.strftime('%m/%d')} ({weekday})", expanded=True):
-                # 표시용 데이터 가공
-                display_group = group[['time', 'country', 'event', 'imp']].copy()
-                display_group.columns = ['시간', '국가', '지표명', '중요도']
+                # --- 수정된 부분: actual, forecast, previous 컬럼을 포함하도록 변경 ---
+                display_group = group[['time', 'country', 'event', 'imp', 'actual', 'forecast', 'previous']].copy()
+                
+                # 컬럼명 한글로 변경
+                display_group.columns = ['시간', '국가', '지표명', '중요도', '실제치', '예측치', '이전치']
+                
+                # 표 출력
                 st.table(display_group)
 
+# --- 실행 로직 ---
 if menu == "메인 대시보드":
     main_dashboard()
 elif menu == "FOMC":
