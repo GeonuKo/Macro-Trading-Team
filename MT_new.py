@@ -127,7 +127,7 @@ def bonds_page():
                     if pd.isna(raw_chg):
                         delta_val = "N/A"
                     else:
-                        bp_chg = raw_chg * 10
+                        bp_chg = raw_chg
                         delta_val = f"{bp_chg:+.1f} bp"
                     
                     st.metric(label=tenor, value=f"{yld:.3f}%", delta=delta_val, delta_color="inverse")
